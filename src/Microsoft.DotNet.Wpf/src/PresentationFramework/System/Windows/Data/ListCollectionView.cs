@@ -827,6 +827,42 @@ namespace System.Windows.Data
                                         -1, position);
         }
 
+                // Calling IList.Add() will raise an ItemAdded event.  We handle this specially
+        // to adjust the position of the new item in the view (it should be adjacent
+        // to the placeholder), and cache the new item for use by the other APIs
+        // related to AddNew.  This method is called from ProcessCollectionChanged.
+        void BeginAddNewRange(IList items, int index)
+        {
+            Debug.Assert(_newItemIndex == -2 && _newItem == NoNewItem, "unexpected call to BeginAddNew");
+
+            // remember the new item and its position in the underlying list
+            SetNewItem(items[0]); // TODO empty check?
+            _newItemIndex = index;
+
+            // adjust the position of the new item
+            int position = -1;
+            switch (NewItemPlaceholderPosition)
+            {
+                case NewItemPlaceholderPosition.None:
+                    position = UsesLocalArray ? InternalCount - 1 : _newItemIndex;
+                    break;
+                case NewItemPlaceholderPosition.AtBeginning:
+                    position = 1;
+                    break;
+                case NewItemPlaceholderPosition.AtEnd:
+                    position = InternalCount - 2;
+                    break;
+            }
+
+            // raise events as if the new item appeared in the adjusted position
+            ProcessCollectionChangedWithAdjustedIndex(
+                                        new NotifyCollectionChangedEventArgs(
+                                                NotifyCollectionChangedAction.Add,
+                                                newItem,
+                                                position),
+                                        -1, position);
+        }
+
         /// <summary>
         /// Complete the transaction started by <seealso cref="AddNew"/>.  The new
         /// item remains in the collection, and the view's sort, filter, and grouping
@@ -2393,37 +2429,46 @@ namespace System.Windows.Data
                 case NotifyCollectionChangedAction.Add:
                     if (e.NewStartingIndex > _unknownIndex)
                     {
-                        ShadowCollection.Insert(e.NewStartingIndex, e.NewItems[0]);
+                        ShadowCollection.InsertRange(e.NewStartingIndex, e.NewItems);
                     }
                     else
                     {
-                        ShadowCollection.Add(e.NewItems[0]);
+                        ShadowCollection.AddRange(e.NewItems);
                     }
                     break;
                 case NotifyCollectionChangedAction.Remove:
                     if (e.OldStartingIndex > _unknownIndex)
                     {
-                        ShadowCollection.RemoveAt(e.OldStartingIndex);
+                        for (int i = e.OldStartingIndex; i < e.OldItems.Count; i++)
+                        {
+                            ShadowCollection.RemoveAt(i);
+                        }
                     }
                     else
                     {
-                        ShadowCollection.Remove(e.OldItems[0]);
+                        ShadowCollection.RemoveRange(e.OldItems);
                     }
                     break;
                 case NotifyCollectionChangedAction.Replace:
                     if (e.OldStartingIndex > _unknownIndex)
                     {
-                        ShadowCollection[e.OldStartingIndex] = e.NewItems[0];
+                        for (int i = e.OldStartingIndex; i < e.OldItems.Count; i++) // TODO
+                        {
+                            ShadowCollection[e.OldStartingIndex] = e.NewItems[i];
+                        }
                     }
                     else
                     {
                         // allow the ShadowCollection to throw the IndexOutOfRangeException
                         // if the item is not found.
                         tempIndex = ShadowCollection.IndexOf(e.OldItems[0]);
-                        ShadowCollection[tempIndex] = e.NewItems[0];
+                        for (int i = tempIndex; i < e.OldItems.Count; i++) // TODO
+                        {
+                            ShadowCollection[e.OldStartingIndex] = e.NewItems[i];
+                        }
                     }
                     break;
-                case NotifyCollectionChangedAction.Move:
+                case NotifyCollectionChangedAction.Move: // TODO
                     tempIndex = e.OldStartingIndex;
                     if (tempIndex < 0)
                     {
@@ -2522,28 +2567,14 @@ namespace System.Windows.Data
         {
             switch (e.Action)
             {
-                case NotifyCollectionChangedAction.Add:
-                    if (e.NewItems.Count != 1)
-                        throw new NotSupportedException(SR.RangeActionsNotSupported);
-                    break;
-
-                case NotifyCollectionChangedAction.Remove:
-                    if (e.OldItems.Count != 1)
-                        throw new NotSupportedException(SR.RangeActionsNotSupported);
-                    break;
-
-                case NotifyCollectionChangedAction.Replace:
-                    if (e.NewItems.Count != 1 || e.OldItems.Count != 1)
-                        throw new NotSupportedException(SR.RangeActionsNotSupported);
-                    break;
-
                 case NotifyCollectionChangedAction.Move:
-                    if (e.NewItems.Count != 1)
-                        throw new NotSupportedException(SR.RangeActionsNotSupported);
                     if (e.NewStartingIndex < 0)
                         throw new InvalidOperationException(SR.CannotMoveToUnknownPosition);
                     break;
 
+                case NotifyCollectionChangedAction.Add:
+                case NotifyCollectionChangedAction.Remove:
+                case NotifyCollectionChangedAction.Replace:
                 case NotifyCollectionChangedAction.Reset:
                     break;
 
